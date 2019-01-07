@@ -44,6 +44,7 @@ type (
 		AtimeRespCh chan *atime.Response
 		Config      *cmn.Config
 		Cksumcfg    *cmn.CksumConf
+		Mirror      *cmn.MirrorConf
 		Bprops      *cmn.BucketProps
 		// names
 		Fqn             string
@@ -62,6 +63,7 @@ type (
 		Bislocal     bool // the bucket (that contains this object) is local
 		Doesnotexist bool // the object does not exists (by fstat)
 		Misplaced    bool // the object is misplaced
+		IsCopy       bool // is a local replica
 		Badchecksum  bool // this object has a bad checksum
 	}
 )
@@ -89,7 +91,7 @@ func (lom *LOM) LRUenabled() bool { return lom.Bucketmd.LRUenabled(lom.Bucket) }
 func (lom *LOM) String() string {
 	var (
 		a string
-		s = fmt.Sprintf("%s/%s", lom.Bucket, lom.Objname)
+		s = fmt.Sprintf("lom[%s/%s fs=%s", lom.Bucket, lom.Objname, lom.ParsedFQN.MpathInfo.FileSystem)
 	)
 	if glog.V(4) {
 		s += fmt.Sprintf("(%s)", lom.Fqn)
@@ -104,24 +106,18 @@ func (lom *LOM) String() string {
 		}
 	}
 	if lom.Doesnotexist {
-		a = cmn.DoesNotExist
+		a = "(" + cmn.DoesNotExist + ")"
 	}
 	if lom.Misplaced {
-		if a != "" {
-			a += ", "
-		}
-		a += "locally misplaced"
+		a += "(misplaced)"
+	}
+	if lom.IsCopy {
+		a += "(is a copy)"
 	}
 	if lom.Badchecksum {
-		if a != "" {
-			a += ", "
-		}
-		a += "bad checksum"
+		a += "(bad checksum)"
 	}
-	if a != "" {
-		s += " [" + a + "]"
-	}
-	return s
+	return s + a + "]"
 }
 
 // main method
@@ -137,9 +133,17 @@ func (lom *LOM) Fill(action int, config ...*cmn.Config) (errstr string) {
 			lom.Config = cmn.GCO.Get()
 		}
 		lom.Cksumcfg = &lom.Config.Cksum
-		if lom.Bprops != nil && lom.Bprops.Checksum != cmn.ChecksumInherit {
-			lom.Cksumcfg = &lom.Bprops.CksumConf
+		lom.Mirror = &lom.Config.Mirror
+		if lom.Bprops != nil {
+			if lom.Bprops.Checksum != cmn.ChecksumInherit {
+				lom.Cksumcfg = &lom.Bprops.CksumConf
+			}
+			lom.Mirror = &lom.Bprops.MirrorConf
 		}
+	}
+	// [local copy] always enforce LomCopy if the following is true
+	if (lom.Misplaced || action&LomFstat != 0) && lom.Bprops != nil && lom.Bprops.Copies != 0 {
+		action |= LomCopy
 	}
 	//
 	// actions
@@ -157,9 +161,6 @@ func (lom *LOM) Fill(action int, config ...*cmn.Config) (errstr string) {
 			return
 		}
 		lom.Size = finfo.Size()
-		if lom.Bprops != nil && lom.Bprops.Copies != 0 {
-			action |= LomCopy
-		}
 	}
 	if action&LomVersion != 0 {
 		var version []byte
@@ -183,6 +184,10 @@ func (lom *LOM) Fill(action int, config ...*cmn.Config) (errstr string) {
 			return
 		}
 		lom.CopyFQN = string(copyfqn)
+		if lom.CopyFQN == lom.HrwFQN {
+			lom.Misplaced = false
+			lom.IsCopy = true
+		}
 	}
 	return
 }
@@ -260,8 +265,7 @@ func (lom *LOM) ChooseMirror() (fqn string) {
 	}
 	_, currMain := lom.ParsedFQN.MpathInfo.GetIOstats(fs.StatDiskUtil)
 	_, currRepl := parsedCpyFQN.MpathInfo.GetIOstats(fs.StatDiskUtil)
-	// if currRepl.Max < currMain.Max-5 && currRepl.Min <= currMain.Min { // FIXME 5% diff hardcoded
-	if currRepl.Max <= currMain.Max && currRepl.Min <= currMain.Min {
+	if currRepl.Max < currMain.Max-float32(lom.Mirror.MirrorUtilThresh) && currRepl.Min <= currMain.Min {
 		fqn = lom.CopyFQN
 		if glog.V(3) {
 			glog.Infof("GET %s from a mirror %s", lom, parsedCpyFQN.MpathInfo)
@@ -292,7 +296,6 @@ func (lom *LOM) init() (errstr string) {
 	lom.Bucketmd = bowner.Get()
 	lom.Bislocal = lom.Bucketmd.IsLocal(lom.Bucket)
 	lom.Bprops, _ = lom.Bucketmd.Get(lom.Bucket, lom.Bislocal)
-	// cksumcfg
 	if lom.Fqn == "" {
 		lom.Fqn, errstr = FQN(fs.ObjectType, lom.Bucket, lom.Objname, lom.Bislocal)
 	}

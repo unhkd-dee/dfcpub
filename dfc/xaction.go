@@ -298,7 +298,7 @@ func (xs *xactions) renewRechecksum(bucket string) *xactRechecksum {
 	return xrcksum
 }
 
-func (xs *xactions) renewAddCopies(bucket string, bislocal bool, tif cluster.Target) (xcopy *mirror.XactCopy) {
+func (xs *xactions) renewAddCopies(bucket string, bislocal bool, conf *cmn.MirrorConf, tif cluster.Target) (xcopy *mirror.XactCopy) {
 	kind := path.Join(cmn.ActAddCopies, bucket)
 	xs.Lock()
 	xx := xs.findU(kind)
@@ -311,7 +311,7 @@ func (xs *xactions) renewAddCopies(bucket string, bislocal bool, tif cluster.Tar
 	id := xs.uniqueid()
 	base := cmn.NewXactDemandBase(id, kind)
 	slab := gmem2.SelectSlab2(cmn.MiB)
-	xcopy = &mirror.XactCopy{XactDemandBase: *base, Bucket: bucket, Slab: slab, T: tif, Bislocal: bislocal}
+	xcopy = &mirror.XactCopy{XactDemandBase: *base, Bucket: bucket, Slab: slab, Mirror: *conf, T: tif, Bislocal: bislocal}
 	xs.add(xcopy)
 	go xcopy.Run()
 	xs.Unlock()

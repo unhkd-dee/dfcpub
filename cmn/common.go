@@ -47,7 +47,10 @@ var toBiBytes = map[string]int64{
 	"TIB": TiB,
 }
 
-const DoesNotExist = "does not exist"
+const (
+	DoesNotExist = "does not exist"
+	NotSupported = "not supported yet"
+)
 
 type (
 	StringSet map[string]struct{}

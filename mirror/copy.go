@@ -16,20 +16,18 @@ import (
 	"github.com/NVIDIA/dfcpub/memsys"
 )
 
-const (
-	workChanCap = 256
-)
-
 type (
 	XactCopy struct {
 		// implements cmn.Xact a cmn.Runner interfaces
 		cmn.XactDemandBase
 		cmn.Named
 		// runtime
-		workCh  chan *cluster.LOM
-		joggers map[string]*jogger
+		workCh        chan *cluster.LOM
+		mpathChangeCh chan struct{}
+		joggers       map[string]*jogger
 		// init
 		Bucket   string
+		Mirror   cmn.MirrorConf
 		Slab     *memsys.Slab2
 		T        cluster.Target
 		Bislocal bool
@@ -50,23 +48,23 @@ var _ fs.PathRunner = &XactCopy{}
 
 func (r *XactCopy) SetID(id int64) { cmn.Assert(false) }
 
-func (r *XactCopy) ReqAddMountpath(mpath string)     { cmn.Assert(false, "NIY") } // TODO
-func (r *XactCopy) ReqRemoveMountpath(mpath string)  { cmn.Assert(false, "NIY") }
-func (r *XactCopy) ReqEnableMountpath(mpath string)  { cmn.Assert(false, "NIY") }
-func (r *XactCopy) ReqDisableMountpath(mpath string) { cmn.Assert(false, "NIY") }
+func (r *XactCopy) ReqAddMountpath(mpath string)     { r.mpathChangeCh <- struct{}{} } // TODO: same for other "joggers"
+func (r *XactCopy) ReqRemoveMountpath(mpath string)  { r.mpathChangeCh <- struct{}{} }
+func (r *XactCopy) ReqEnableMountpath(mpath string)  { r.mpathChangeCh <- struct{}{} }
+func (r *XactCopy) ReqDisableMountpath(mpath string) { r.mpathChangeCh <- struct{}{} }
 
 //
 // public methods
 //
 
-// - runs on a per- mirrored bucket basis
-// - dispatches replication requests for execution by one of the dedicated "joggers"
+// - runs on a per-mirrored bucket basis
+// - dispatches replication requests to a dedicated mountpath jogger
 // - ref-counts pending requests and self-terminates when idle for a while
 func (r *XactCopy) Run() error {
 	// init
 	availablePaths, _ := fs.Mountpaths.Get()
 	r.init(len(availablePaths))
-
+init:
 	// start mpath joggers
 	for mpath, mpathInfo := range availablePaths {
 		var (
@@ -81,11 +79,18 @@ func (r *XactCopy) Run() error {
 		r.joggers[mpathLC] = jogger
 		go jogger.jog()
 	}
-
 	// control loop
 	for {
 		select {
 		case lom := <-r.workCh:
+			cmn.Assert(r.Mirror.MirrorOptimizeRead, cmn.NotSupported)
+			// [throttle] when the optimization objective is read load balancing (rather than
+			// data redundancy), we drop to make sure senders won't block on the workCh
+			if pending := r.Pending(); r.Mirror.MirrorBurst > 1 && pending >= r.Mirror.MirrorBurst {
+				glog.Errorf("pending=%d, burst=%d - dropping %s", pending, r.Mirror.MirrorBurst, lom)
+				break
+			}
+			// load balance
 			if jogger := r.loadBalance(lom); jogger != nil {
 				jogger.workCh <- lom
 			}
@@ -97,6 +102,18 @@ func (r *XactCopy) Run() error {
 		case <-r.ChanAbort():
 			r.stop()
 			return fmt.Errorf("%s aborted, exiting", r)
+		case <-r.mpathChangeCh:
+			for _, jogger := range r.joggers {
+				jogger.stop()
+			}
+			availablePaths, _ = fs.Mountpaths.Get()
+			l := len(availablePaths)
+			r.joggers = make(map[string]*jogger, l) // new joggers map
+			if l == 0 {
+				r.stop()
+				return fmt.Errorf("%s no mountpaths, exiting", r)
+			}
+			goto init // reinitialize and keep running
 		}
 	}
 }
@@ -119,12 +136,13 @@ func (r *XactCopy) Stop(error) { r.Abort() } // call base method
 //
 
 func (r *XactCopy) init(l int) {
-	r.workCh = make(chan *cluster.LOM, workChanCap)
+	r.workCh = make(chan *cluster.LOM, r.Mirror.MirrorBurst)
 	r.joggers = make(map[string]*jogger, l)
 }
 
 // =================== load balancing and self-throttling ========================
-// Load balancing decision must (... TODO ...) be configurable and a function of:
+// Generally,
+// load balancing decision must (... TODO ...) be configurable and a function of:
 // - current utilization (%) of the filesystem's disks;
 // - current disk queue lengths and their respective minimums and maximums during
 //   the reporting period (config.Periodic.IostatTime);
@@ -183,7 +201,7 @@ func (j *jogger) stop() {
 }
 
 func (j *jogger) jog() {
-	j.workCh = make(chan *cluster.LOM, workChanCap)
+	j.workCh = make(chan *cluster.LOM, j.parent.Mirror.MirrorBurst)
 	j.stopCh = make(chan struct{}, 1)
 	j.buf = j.parent.Slab.Alloc()
 loop:
@@ -199,14 +217,19 @@ loop:
 	j.parent.Slab.Free(j.buf)
 }
 
-// TODO: 1) handle errors
-//       4) throttle
-//       5) versioned updates vs outdated replicas
-//       6) elsewhere: fix LRU from evicting; support reduction num replicas for symmetry
-//       7) verbose log
-//       8) target's removeBuckets() won't work
-//       9) forbid setting bucket.copies back to zero - see proxy.go
+// TODO: - versioned updates
+//       - disable active mirror via bucket props
 func (j *jogger) mirror(lom *cluster.LOM) {
+	cmn.Assert(j.parent.Mirror.MirrorOptimizeRead, cmn.NotSupported)
+	// [throttle] when the optimization objective is read load balancing (rather than
+	// data redundancy), we start dropping requests at high (local FS) utilization
+	_, curr := j.mpathInfo.GetIOstats(fs.StatDiskUtil)
+	if curr.Max >= float32(lom.Config.Xaction.DiskUtilHighWM) && curr.Min > float32(lom.Config.Xaction.DiskUtilLowWM) {
+		glog.Errorf("utilization %s - dropping %s => %s", curr, lom, j.mpathInfo)
+		return
+	}
+
+	// copy
 	var (
 		cpyfqn       string
 		parsedCpyFQN = lom.ParsedFQN

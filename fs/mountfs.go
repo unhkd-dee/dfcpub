@@ -129,7 +129,7 @@ func newMountpath(path string, fsid syscall.Fsid, fs string) *MountpathInfo {
 		iostats:    make(map[string]*iotracker, 2),
 		ioepoch:    make(map[string]int64, 2),
 	}
-	mi.iostats[StatDiskUtil] = &iotracker{} // FIXME: ios.Const
+	mi.iostats[StatDiskUtil] = &iotracker{}
 	mi.iostats[StatQueueLen] = &iotracker{}
 	return mi
 }
@@ -211,7 +211,7 @@ func (mi *MountpathInfo) SetIOstats(epoch int64, name string, f float32) {
 func (mi *MountpathInfo) String() string {
 	_, u := mi.GetIOstats(StatDiskUtil)
 	_, q := mi.GetIOstats(StatQueueLen)
-	return fmt.Sprintf("mp=%s, fs=%s, util=d%s:q%s", mi.Path, mi.FileSystem, u, q)
+	return fmt.Sprintf("mp[%s, fs=%s, util=d%s:q%s]", mi.Path, mi.FileSystem, u, q)
 }
 
 //

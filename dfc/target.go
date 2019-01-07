@@ -1079,19 +1079,12 @@ func (t *targetrunner) httpobjpost(w http.ResponseWriter, r *http.Request) {
 
 // HEAD /v1/buckets/bucket-name
 func (t *targetrunner) httpbckhead(w http.ResponseWriter, r *http.Request) {
-	var (
-		bucket      string
-		errstr      string
-		bucketprops cmn.SimpleKVs
-		cksumcfg    *cmn.CksumConf
-		errcode     int
-		islocal     bool
-	)
+	var bucketprops cmn.SimpleKVs
 	apitems, err := t.checkRESTItems(w, r, 1, false, cmn.Version, cmn.Buckets)
 	if err != nil {
 		return
 	}
-	bucket = apitems[0]
+	bucket := apitems[0]
 	if !t.validatebckname(w, r, bucket) {
 		return
 	}
@@ -1101,8 +1094,8 @@ func (t *targetrunner) httpbckhead(w http.ResponseWriter, r *http.Request) {
 		glog.Infof("%s %s <= %s", r.Method, bucket, pid)
 	}
 	bucketmd := t.bmdowner.get()
-	islocal = bucketmd.IsLocal(bucket)
-	errstr, errcode = t.IsBucketLocal(bucket, &bucketmd.BMD, query, islocal)
+	islocal := bucketmd.IsLocal(bucket)
+	errstr, errcode := t.IsBucketLocal(bucket, &bucketmd.BMD, query, islocal)
 	if errstr != "" {
 		t.invalmsghdlr(w, r, errstr, errcode)
 		return
@@ -1129,29 +1122,35 @@ func (t *targetrunner) httpbckhead(w http.ResponseWriter, r *http.Request) {
 		hdr.Add(k, v)
 	}
 
-	props, _, defined := bucketmd.propsAndChecksum(bucket)
-	// include checksumming settings in the response
-	cksumcfg = &cmn.GCO.Get().Cksum
-	if defined {
+	// include bucket's own config override
+	props, ok := bucketmd.Get(bucket, islocal)
+	if props == nil {
+		return
+	}
+	config := cmn.GCO.Get()
+	cksumcfg := &config.Cksum // FIXME: must be props.CksumConf w/o conditions, here and elsewhere
+	if ok && props.Checksum != cmn.ChecksumInherit {
 		cksumcfg = &props.CksumConf
 	}
 	// transfer bucket props via http header;
-	// note that it is totally legal for Cloud buckets to not have locally cached props
-	if props != nil {
-		hdr.Add(cmn.HeaderNextTierURL, props.NextTierURL)
-		hdr.Add(cmn.HeaderReadPolicy, props.ReadPolicy)
-		hdr.Add(cmn.HeaderWritePolicy, props.WritePolicy)
-		hdr.Add(cmn.HeaderBucketChecksumType, cksumcfg.Checksum)
-		hdr.Add(cmn.HeaderBucketValidateColdGet, strconv.FormatBool(cksumcfg.ValidateColdGet))
-		hdr.Add(cmn.HeaderBucketValidateWarmGet, strconv.FormatBool(cksumcfg.ValidateWarmGet))
-		hdr.Add(cmn.HeaderBucketValidateRange, strconv.FormatBool(cksumcfg.EnableReadRangeChecksum))
-		hdr.Add(cmn.HeaderBucketLRULowWM, strconv.FormatInt(props.LowWM, 10))
-		hdr.Add(cmn.HeaderBucketLRUHighWM, strconv.FormatInt(props.HighWM, 10))
-		hdr.Add(cmn.HeaderBucketAtimeCacheMax, strconv.FormatInt(props.AtimeCacheMax, 10))
-		hdr.Add(cmn.HeaderBucketDontEvictTime, props.DontEvictTimeStr)
-		hdr.Add(cmn.HeaderBucketCapUpdTime, props.CapacityUpdTimeStr)
-		hdr.Add(cmn.HeaderBucketLRUEnabled, strconv.FormatBool(props.LRUEnabled))
-		hdr.Add(cmn.HeaderBucketCopies, strconv.FormatInt(props.Copies, 10))
+	// (it is totally legal for Cloud buckets to not have locally cached props)
+	hdr.Add(cmn.HeaderNextTierURL, props.NextTierURL)
+	hdr.Add(cmn.HeaderReadPolicy, props.ReadPolicy)
+	hdr.Add(cmn.HeaderWritePolicy, props.WritePolicy)
+	hdr.Add(cmn.HeaderBucketChecksumType, cksumcfg.Checksum)
+	hdr.Add(cmn.HeaderBucketValidateColdGet, strconv.FormatBool(cksumcfg.ValidateColdGet))
+	hdr.Add(cmn.HeaderBucketValidateWarmGet, strconv.FormatBool(cksumcfg.ValidateWarmGet))
+	hdr.Add(cmn.HeaderBucketValidateRange, strconv.FormatBool(cksumcfg.EnableReadRangeChecksum))
+	hdr.Add(cmn.HeaderBucketLRULowWM, strconv.FormatInt(props.LowWM, 10))
+	hdr.Add(cmn.HeaderBucketLRUHighWM, strconv.FormatInt(props.HighWM, 10))
+	hdr.Add(cmn.HeaderBucketAtimeCacheMax, strconv.FormatInt(props.AtimeCacheMax, 10))
+	hdr.Add(cmn.HeaderBucketDontEvictTime, props.DontEvictTimeStr)
+	hdr.Add(cmn.HeaderBucketCapUpdTime, props.CapacityUpdTimeStr)
+	hdr.Add(cmn.HeaderBucketLRUEnabled, strconv.FormatBool(props.LRUEnabled))
+	if props.MirrorEnabled {
+		hdr.Add(cmn.HeaderBucketCopies, strconv.FormatInt(props.MirrorConf.Copies, 10))
+	} else {
+		hdr.Add(cmn.HeaderBucketCopies, "0")
 	}
 }
 
@@ -2053,14 +2052,14 @@ func (t *targetrunner) doPut(r *http.Request, bucket, objname string) (errstr st
 			glog.Infof("PUT: %s/%s, %d µs", bucket, objname, int64(delta/time.Microsecond))
 		}
 		// local mirror
-		if lom.Bprops != nil && lom.Bprops.Copies != 0 {
+		if lom.Mirror.MirrorEnabled {
 			if t.xcopy == nil || t.xcopy.Finished() || t.xcopy.Bucket != lom.Bucket || t.xcopy.Bislocal != lom.Bislocal {
-				t.xcopy = t.xactions.renewAddCopies(lom.Bucket, lom.Bislocal, t)
+				t.xcopy = t.xactions.renewAddCopies(lom.Bucket, lom.Bislocal, lom.Mirror, t)
 			}
 			err := t.xcopy.Copy(lom)
 			// renew upon xcopy timeout vs xcopy.Copy() race
 			if _, ok := err.(*cmn.ErrXpired); ok {
-				t.xcopy = t.xactions.renewAddCopies(lom.Bucket, lom.Bislocal, t)
+				t.xcopy = t.xactions.renewAddCopies(lom.Bucket, lom.Bislocal, lom.Mirror, t)
 				if err = t.xcopy.Copy(lom); err != nil {
 					glog.Errorf("Unexpected: %v", err)
 				}
@@ -2290,7 +2289,7 @@ func (t *targetrunner) renamefile(w http.ResponseWriter, r *http.Request, msg cm
 }
 
 func (t *targetrunner) replicate(w http.ResponseWriter, r *http.Request, msg cmn.ActionMsg) {
-	t.invalmsghdlr(w, r, "not supported yet") // NOTE: daemon.go, proxy.go, config.sh, and tests/replication
+	t.invalmsghdlr(w, r, cmn.NotSupported) // NOTE: daemon.go, proxy.go, config.sh, and tests/replication
 }
 
 func (t *targetrunner) renameObject(contentType, bucketFrom, objnameFrom, bucketTo, objnameTo string) (errstr string) {

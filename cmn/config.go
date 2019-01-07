@@ -153,6 +153,7 @@ func (gco *globalConfigOwner) Subscribe(cl ConfigListener) {
 type Config struct {
 	Confdir          string          `json:"confdir"`
 	CloudProvider    string          `json:"cloudprovider"`
+	Mirror           MirrorConf      `json:"mirror"`
 	Readahead        RahConf         `json:"readahead"`
 	Log              LogConf         `json:"log"`
 	Periodic         PeriodConf      `json:"periodic"`
@@ -170,6 +171,14 @@ type Config struct {
 	FSHC             FSHCConf        `json:"fshc"`
 	Auth             AuthConf        `json:"auth"`
 	KeepaliveTracker KeepaliveConf   `json:"keepalivetracker"`
+}
+
+type MirrorConf struct {
+	Copies             int64 `json:"copies"`               // num local copies
+	MirrorBurst        int64 `json:"mirror_burst_buffer"`  // channel buffer size
+	MirrorUtilThresh   int64 `json:"mirror_util_thresh"`   // utilizations are considered equivalent when below this threshold
+	MirrorOptimizeRead bool  `json:"mirror_optimize_read"` // optimization objective: read load balancing (true) | data redundancy (false)
+	MirrorEnabled      bool  `json:"mirror_enabled"`       // will only generate local copies when set to true
 }
 
 type RahConf struct {
@@ -472,6 +481,10 @@ func validateConfig(config *Config) (err error) {
 	hwm, lwm := config.LRU.HighWM, config.LRU.LowWM
 	if hwm <= 0 || lwm <= 0 || hwm < lwm || lwm > 100 || hwm > 100 {
 		return fmt.Errorf("Invalid LRU configuration %+v", config.LRU)
+	}
+
+	if config.Mirror.Copies != 2 || config.Mirror.MirrorUtilThresh < 0 || config.Mirror.MirrorUtilThresh > 100 || config.Mirror.MirrorBurst < 0 {
+		return fmt.Errorf("Invalid mirror configuration %+v", config.Mirror)
 	}
 
 	diskUtilHWM, diskUtilLWM := config.Xaction.DiskUtilHighWM, config.Xaction.DiskUtilLowWM

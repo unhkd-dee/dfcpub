@@ -75,28 +75,31 @@ func (lctx *lructx) walk(fqn string, osfi os.FileInfo, err error) error {
 		}
 		return nil
 	}
+	// workfiles: evict old or do nothing
 	if lctx.contentType == fs.WorkfileType {
 		_, base := filepath.Split(fqn)
 		_, old, ok := lctx.contentResolver.ParseUniqueFQN(base)
 		if ok && old {
 			fi := &fileInfo{fqn: fqn, lom: lom, old: old}
-			glog.Infof("%q is old", fqn)
+			if glog.V(4) {
+				glog.Infof("old-work: %s, fqn=%s", lom, fqn)
+			}
 			lctx.oldwork = append(lctx.oldwork, fi) // TODO: upper-limit to avoid OOM; see Push as well
 		}
 		return nil
 	}
-
+	// objects
 	cmn.Assert(lctx.contentType == fs.ObjectType) // see also lrumain.go
 	if lom.Atime.After(lctx.dontevictime) {
 		if glog.V(4) {
-			glog.Infof("%q: not evicting (usetime %v, dontevictime %v)", fqn, lom.Atime, lctx.dontevictime)
+			glog.Infof("dont-evict: %s(%v > %v)", lom, lom.Atime, lctx.dontevictime)
 		}
 		return nil
 	}
 
 	// includes post-rebalancing cleanup
 	if lom.Misplaced {
-		glog.Infof("%q: is misplaced, err: %v", fqn, err)
+		glog.Infof("misplaced: %s, fqn=%s", lom, fqn)
 		fi := &fileInfo{fqn: fqn, lom: lom}
 		lctx.oldwork = append(lctx.oldwork, fi)
 		return nil
@@ -107,12 +110,12 @@ func (lctx *lructx) walk(fqn string, osfi os.FileInfo, err error) error {
 	// the file is more recent then the the heap's newest
 	// full optimization (TODO) entails compacting the heap when its cursize >> totsize
 	if lctx.cursize >= lctx.totsize && lom.Atime.After(lctx.newest) {
-		if glog.V(4) {
-			glog.Infof("%q: use-time-after (usetime=%v, newest=%v)", fqn, lom.Atime, lctx.newest)
-		}
 		return nil
 	}
 	// push and update the context
+	if glog.V(4) {
+		glog.Infof("old-obj: %s, fqn=%s", lom, fqn)
+	}
 	fi := &fileInfo{fqn: fqn, lom: lom}
 	heap.Push(h, fi)
 	lctx.cursize += fi.lom.Size
@@ -133,7 +136,9 @@ func (lctx *lructx) evict() (err error) {
 			continue
 		}
 		if err = os.Remove(fi.fqn); err != nil {
-			glog.Warningf("Failed to remove %q", fi.fqn)
+			if !os.IsNotExist(err) {
+				glog.Warningf("Failed to remove %q", fi.fqn)
+			}
 			continue
 		}
 		if capCheck, err = lctx.postRemove(capCheck, fi); err != nil {
@@ -186,21 +191,24 @@ func (lctx *lructx) postRemove(capCheck int64, fi *fileInfo) (int64, error) {
 }
 
 func (lctx *lructx) evictObj(fi *fileInfo) (ok bool) {
-	if fi.lom.Misplaced {
-		if err := os.Remove(fi.lom.Fqn); err != nil {
-			glog.Errorln(err)
-			return
-		}
-		glog.Infof("Removed misplaced object %s (%s)", fi.lom, fi.lom.Fqn)
-		return
-	}
 	lctx.ini.Namelocker.Lock(fi.lom.Uname, true)
-
-	if err := os.Remove(fi.lom.Fqn); err != nil {
-		glog.Errorf("Failed to evict %s (%s), err: %v", fi.lom, fi.lom.Fqn, err)
-	} else {
+	// local replica must be go with the object; the replica, however, is
+	// located in a different local FS and belongs, therefore, to a different LRU jogger
+	// (hence, precise size accounting TODO)
+	if fi.lom.CopyFQN != "" {
+		if err := os.Remove(fi.lom.CopyFQN); err != nil {
+			if !os.IsNotExist(err) {
+				glog.Infof("Failed to remove copy(%s)=>%s, err: %v", fi.lom, fi.lom.CopyFQN, err)
+			}
+		}
+	}
+	if err := os.Remove(fi.lom.Fqn); err == nil {
+		glog.Infof("Evicted %s", fi.lom)
 		ok = true
-		glog.Infof("Evicted %s (%s)", fi.lom, fi.lom.Fqn)
+	} else if os.IsNotExist(err) {
+		ok = true
+	} else {
+		glog.Errorf("Failed to evict %s, err: %v", fi.lom, err)
 	}
 	lctx.ini.Namelocker.Unlock(fi.lom.Uname, true)
 	return
