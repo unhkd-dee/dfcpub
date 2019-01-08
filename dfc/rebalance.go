@@ -409,12 +409,12 @@ func (t *targetrunner) runRebalance(newsmap *smapX, newtargetid string) {
 		}
 
 		for _, mpathInfo := range availablePaths {
-			mpathC := mpathInfo.MakePathCloud(contentType)
+			mpathC := mpathInfo.MakePath(contentType, false /*cloud*/)
 			rc := &globalRebJogger{t: t, mpathplus: mpathC, xreb: xreb, wg: wg, newsmap: newsmap}
 			wg.Add(1)
 			go rc.jog()
 			allr = append(allr, rc)
-			mpathL := mpathInfo.MakePathLocal(contentType)
+			mpathL := mpathInfo.MakePath(contentType, true /*is local*/)
 			rl := &globalRebJogger{t: t, mpathplus: mpathL, xreb: xreb, wg: wg, newsmap: newsmap}
 			wg.Add(1)
 			go rl.jog()
@@ -502,12 +502,12 @@ func (t *targetrunner) runLocalRebalance() {
 
 		slab := gmem2.SelectSlab2(cmn.MiB)
 		for _, mpathInfo := range availablePaths {
-			mpathC := mpathInfo.MakePathCloud(contentType)
+			mpathC := mpathInfo.MakePath(contentType, false /*cloud*/)
 			jogger := &localRebJogger{t: t, mpath: mpathC, xreb: xreb, wg: wg, slab: slab}
 			wg.Add(1)
 			go jogger.jog()
 			allr = append(allr, jogger)
-			mpathL := mpathInfo.MakePathLocal(contentType)
+			mpathL := mpathInfo.MakePath(contentType, true /*is local*/)
 			jogger = &localRebJogger{t: t, mpath: mpathL, xreb: xreb, wg: wg, slab: slab}
 			wg.Add(1)
 			go jogger.jog()

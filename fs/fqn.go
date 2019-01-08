@@ -12,9 +12,6 @@ import (
 )
 
 const (
-	BucketLocalType = "local"
-	BucketCloudType = "cloud"
-
 	// prefixes for workfiles created by various services
 	WorkfileReplication = "repl"   // replication runner
 	WorkfileRemote      = "remote" // getting object from neighbor target while rebalance is running
@@ -84,21 +81,15 @@ func (mfs *MountedFS) Path2MpathInfo(path string) (info *MountpathInfo, relative
 }
 
 func (mfs *MountedFS) CreateBucketDir(bucketType string) error {
-	if !cmn.StringInSlice(bucketType, []string{BucketLocalType, BucketCloudType}) {
-		return fmt.Errorf("unknown bucket type: %s", bucketType)
+	if !cmn.StringInSlice(bucketType, []string{cmn.LocalBs, cmn.CloudBs}) {
+		cmn.Assert(false, "unknown bucket type: '"+bucketType+"'")
 	}
 	availablePaths, _ := Mountpaths.Get()
-
-	makeBucket := mfs.MakePathLocal
-	if bucketType == BucketCloudType {
-		makeBucket = mfs.MakePathCloud
-	}
-
 	for contentType := range CSM.RegisteredContentTypes {
 		for _, mpathInfo := range availablePaths {
-			dir := makeBucket(mpathInfo.Path, contentType)
+			dir := mpathInfo.MakePath(contentType, bucketType == cmn.LocalBs)
 			if _, exists := availablePaths[dir]; exists {
-				return fmt.Errorf("local namespace partitioning conflict: %s vs %s", mpathInfo.Path, dir)
+				return fmt.Errorf("local namespace partitioning conflict: %s vs %s", mpathInfo, dir)
 			}
 			if err := cmn.CreateDir(dir); err != nil {
 				return fmt.Errorf("cannot create %s buckets dir %q, err: %v", bucketType, dir, err)

@@ -44,7 +44,7 @@ func (t *targetrunner) runRechecksumBucket(bucket string) {
 		for _, mpathInfo := range availablePaths {
 			wg.Add(1)
 			go func(mpathInfo *fs.MountpathInfo) {
-				mpathL := mpathInfo.MakePathLocal(contentType)
+				mpathL := mpathInfo.MakePath(contentType, true /*bucket is local*/)
 				t.oneRechecksumBucket(mpathInfo, mpathL, xrcksum)
 				wg.Done()
 			}(mpathInfo)
@@ -53,7 +53,8 @@ func (t *targetrunner) runRechecksumBucket(bucket string) {
 		for _, mpathInfo := range availablePaths {
 			wg.Add(1)
 			go func(mpathInfo *fs.MountpathInfo) {
-				t.oneRechecksumBucket(mpathInfo, fs.Mountpaths.MakePathCloud(mpathInfo.Path, contentType), xrcksum)
+				mpathC := mpathInfo.MakePath(contentType, false /*cloud*/)
+				t.oneRechecksumBucket(mpathInfo, mpathC, xrcksum)
 				wg.Done()
 			}(mpathInfo)
 		}

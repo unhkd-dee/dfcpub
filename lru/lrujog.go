@@ -28,19 +28,20 @@ import (
 
 func (lctx *lructx) jog(wg *sync.WaitGroup) {
 	defer wg.Done()
-	now := time.Now()
-	lctx.dontevictime = now.Add(-lctx.config.LRU.DontEvictTime)
-
-	lctx.heap = &fileInfoMinHeap{}
-	heap.Init(lctx.heap)
 	if err := lctx.evictSize(); err != nil {
 		return
 	}
 	if lctx.totsize < minEvictThresh {
-		glog.Infof("%s: below threshold, nothing to do", lctx.bckTypeDir)
+		glog.Infof("%s: below threshold, nothing to do", lctx.mpathInfo)
 		return
 	}
-	glog.Infof("%s: evicting %s", lctx.bckTypeDir, cmn.B2S(lctx.totsize, 2))
+	now := time.Now()
+
+	lctx.bckTypeDir = lctx.mpathInfo.MakePath(lctx.contentType, lctx.bislocal)
+	lctx.dontevictime = now.Add(-lctx.config.LRU.DontEvictTime)
+	lctx.heap = &fileInfoMinHeap{}
+	heap.Init(lctx.heap)
+	glog.Infof("%s: evicting %s", lctx.mpathInfo, cmn.B2S(lctx.totsize, 2))
 
 	if err := filepath.Walk(lctx.bckTypeDir, lctx.walk); err != nil {
 		s := err.Error()
@@ -223,8 +224,7 @@ func (lctx *lructx) evictSize() (err error) {
 	used := blocks - bavail
 	usedpct := used * 100 / blocks
 	if glog.V(4) {
-		glog.Infof("%s: Blocks %d Bavail %d used %d%% hwm %d%% lwm %d%%",
-			lctx.bckTypeDir, blocks, bavail, usedpct, hwm, lwm)
+		glog.Infof("%s: Blocks %d Bavail %d used %d%% hwm %d%% lwm %d%%", lctx.mpathInfo, blocks, bavail, usedpct, hwm, lwm)
 	}
 	if usedpct < uint64(hwm) {
 		return

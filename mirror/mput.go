@@ -67,15 +67,8 @@ func (r *XactCopy) Run() error {
 init:
 	// start mpath copiers
 	for _, mpathInfo := range availablePaths {
-		var (
-			mpathLC string
-			copier  = &copier{parent: r, mpathInfo: mpathInfo}
-		)
-		if r.Bislocal {
-			mpathLC = mpathInfo.MakePathLocal(fs.ObjectType)
-		} else {
-			mpathLC = mpathInfo.MakePathCloud(fs.ObjectType)
-		}
+		copier := &copier{parent: r, mpathInfo: mpathInfo}
+		mpathLC := mpathInfo.MakePath(fs.ObjectType, r.Bislocal)
 		r.copiers[mpathLC] = copier
 		go copier.jog()
 	}

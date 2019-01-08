@@ -210,24 +210,21 @@ func (mi *MountpathInfo) String() string {
 	return fmt.Sprintf("mp[%s, fs=%s, util=d%s:q%s]", mi.Path, mi.FileSystem, u, q)
 }
 
-// builds fqn of directory for all local buckets from mountpath
-func (mi *MountpathInfo) MakePathLocal(contentType string) string {
-	return filepath.Join(mi.Path, contentType, cmn.LocalBs)
-}
-
-// builds fqn of directory for all cloud buckets from mountpath
-func (mi *MountpathInfo) MakePathCloud(contentType string) string {
-	return filepath.Join(mi.Path, contentType, cmn.CloudBs)
-}
-
-func (mi *MountpathInfo) MakeBucketDir(contentType, bucket string, bislocal bool) (dir string) {
+// returns fqn for a given content-type
+func (mi *MountpathInfo) MakePath(contentType string, bislocal bool) (fqn string) {
 	if bislocal {
-		dir = mi.MakePathLocal(contentType)
+		fqn = filepath.Join(mi.Path, contentType, cmn.LocalBs)
 	} else {
-		dir = mi.MakePathCloud(contentType)
+		fqn = filepath.Join(mi.Path, contentType, cmn.CloudBs)
 	}
-	dir = filepath.Join(dir, bucket)
 	return
+}
+
+func (mi *MountpathInfo) MakePathBucket(contentType, bucket string, bislocal bool) string {
+	return filepath.Join(mi.MakePath(contentType, bislocal), bucket)
+}
+func (mi *MountpathInfo) MakePathBucketObject(contentType, bucket, objname string, bislocal bool) string {
+	return filepath.Join(mi.MakePath(contentType, bislocal), bucket, objname)
 }
 
 //
@@ -406,28 +403,44 @@ func (mfs *MountedFS) Get() (map[string]*MountpathInfo, map[string]*MountpathInf
 // DisableFsIDCheck disables fsid checking when adding new mountpath
 func (mfs *MountedFS) DisableFsIDCheck() { mfs.checkFsID = false }
 
-// given mpath, returns local (buckets) directory for a given content-type
-func (mfs *MountedFS) MakePathLocal(mpath, contentType string) string {
-	availablePaths, disabledPaths := mfs.Get()
-	if mi, exists := availablePaths[mpath]; exists {
-		return mi.MakePathLocal(contentType)
-	} else if mi, exists = disabledPaths[mpath]; exists {
-		return mi.MakePathLocal(contentType)
+func (mfs *MountedFS) CreateDestroyLB(op string, create bool, buckets ...string) {
+	const (
+		fmt1       = "%s: failed to %s %q, err: %v"
+		fmt2       = "%s: %s %q for content-type %q, bucket %q"
+		createstr  = "create-local-bucket-dir"
+		destroystr = "destroy-local-bucket-dir"
+	)
+	var (
+		availablePaths, _ = mfs.Get()
+		contentTypes      = CSM.RegisteredContentTypes
+		wg                = &sync.WaitGroup{}
+	)
+	for _, mpathInfo := range availablePaths {
+		wg.Add(1)
+		go func(mi *MountpathInfo) {
+			for _, bucket := range buckets {
+				for contentType := range contentTypes {
+					dir := mi.MakePathBucket(contentType, bucket, true /*bucket is local*/)
+					// TODO: on error abort and rollback
+					if create {
+						if err := cmn.CreateDir(dir); err != nil {
+							glog.Errorf(fmt1, op, createstr, dir, err)
+						} else {
+							glog.Infof(fmt2, op, createstr, dir, contentType, bucket)
+						}
+					} else { // destroy
+						if err := mi.FastRemoveDir(dir); err != nil {
+							glog.Errorf(fmt1, op, destroystr, dir, err)
+						} else {
+							glog.Infof(fmt2, op, destroystr, dir, contentType, bucket)
+						}
+					}
+				}
+			}
+			wg.Done()
+		}(mpathInfo)
 	}
-	glog.Errorf("Invalid mountpath %s", mpath)
-	return ""
-}
-
-// given mpath, returns cloud (buckets) directory for a given content-type
-func (mfs *MountedFS) MakePathCloud(mpath, contentType string) string {
-	availablePaths, disabledPaths := mfs.Get()
-	if mi, exists := availablePaths[mpath]; exists {
-		return mi.MakePathCloud(contentType)
-	} else if mi, exists = disabledPaths[mpath]; exists {
-		return mi.MakePathCloud(contentType)
-	}
-	glog.Errorf("Invalid mountpath %s", mpath)
-	return ""
+	wg.Wait()
 }
 
 //

@@ -159,14 +159,8 @@ func (f *ContentSpecMgr) FileSpec(fqn string) (resolver ContentResolver, info *C
 func (f *ContentSpecMgr) FQN(mi *MountpathInfo, contentType string, isLocal bool, bucket, objName string) (fqn string) {
 	if _, ok := f.RegisteredContentTypes[contentType]; !ok {
 		cmn.Assert(false, fmt.Sprintf("contentType %s was not registered", contentType))
-		return
 	}
-	if isLocal {
-		fqn = mi.MakePathLocal(contentType)
-	} else {
-		fqn = mi.MakePathCloud(contentType)
-	}
-	return filepath.Join(fqn, bucket, objName)
+	return mi.MakePathBucketObject(contentType, bucket, objName, isLocal)
 }
 
 func (f *ContentSpecMgr) PermToEvict(fqn string) (ok, isOld bool) {

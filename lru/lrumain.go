@@ -75,9 +75,9 @@ type (
 		ini             InitLRU
 		mpathInfo       *fs.MountpathInfo
 		contentType     string
+		bckTypeDir      string
 		contentResolver fs.ContentResolver
 		config          *cmn.Config
-		bckTypeDir      string
 		atimeRespCh     chan *atime.Response
 		dontevictime    time.Time
 		bislocal        bool
@@ -127,14 +127,7 @@ func InitAndRun(ini *InitLRU) {
 	}
 }
 
-func newlru(ini *InitLRU, mpathInfo *fs.MountpathInfo, contentType string, contentResolver fs.ContentResolver,
-	config *cmn.Config, bislocal bool) *lructx {
-	var bckTypeDir string
-	if bislocal {
-		bckTypeDir = mpathInfo.MakePathLocal(contentType)
-	} else {
-		bckTypeDir = mpathInfo.MakePathCloud(contentType)
-	}
+func newlru(ini *InitLRU, mpathInfo *fs.MountpathInfo, contentType string, contentResolver fs.ContentResolver, config *cmn.Config, bislocal bool) *lructx {
 	lctx := &lructx{
 		oldwork:         make([]*fileInfo, 0, 64),
 		ini:             *ini,
@@ -142,7 +135,6 @@ func newlru(ini *InitLRU, mpathInfo *fs.MountpathInfo, contentType string, conte
 		contentType:     contentType,
 		contentResolver: contentResolver,
 		config:          config,
-		bckTypeDir:      bckTypeDir,
 		atimeRespCh:     make(chan *atime.Response, 1),
 		bislocal:        bislocal,
 	}

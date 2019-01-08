@@ -425,7 +425,7 @@ func (p *proxyrunner) httpbckdelete(w http.ResponseWriter, r *http.Request) {
 			p.invalmsghdlr(w, r, s)
 			return
 		}
-		if errstr := p.savebmdconf(clone); errstr != "" {
+		if errstr := p.savebmdconf(clone, cmn.GCO.Get()); errstr != "" {
 			p.bmdowner.Unlock()
 			p.invalmsghdlr(w, r, errstr)
 			return
@@ -577,7 +577,7 @@ func (p *proxyrunner) httpbckpost(w http.ResponseWriter, r *http.Request) {
 			p.invalmsghdlr(w, r, fmt.Sprintf("Local bucket %s already exists", lbucket))
 			return
 		}
-		if errstr := p.savebmdconf(clone); errstr != "" {
+		if errstr := p.savebmdconf(clone, config); errstr != "" {
 			p.bmdowner.Unlock()
 			p.invalmsghdlr(w, r, errstr)
 			return
@@ -752,7 +752,7 @@ func (p *proxyrunner) httpbckput(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	clone.set(bucket, isLocal, bprops)
-	if e := p.savebmdconf(clone); e != "" {
+	if e := p.savebmdconf(clone, config); e != "" {
 		glog.Errorln(e)
 	}
 	p.bmdowner.put(clone)
@@ -849,7 +849,7 @@ func (p *proxyrunner) reverseDP(w http.ResponseWriter, r *http.Request, tsi *clu
 func (p *proxyrunner) renameLB(bucketFrom, bucketTo string, clone *bucketMD, props *cmn.BucketProps,
 	msg *cmn.ActionMsg) bool {
 	smap4bcast := p.smapowner.get()
-
+	config := cmn.GCO.Get()
 	msg.Value = clone
 	jsbytes, err := jsoniter.Marshal(msg)
 	cmn.Assert(err == nil, err)
@@ -860,7 +860,7 @@ func (p *proxyrunner) renameLB(bucketFrom, bucketTo string, clone *bucketMD, pro
 		http.MethodPost,
 		jsbytes,
 		smap4bcast,
-		cmn.GCO.Get().Timeout.Default,
+		config.Timeout.Default,
 		cmn.NetworkIntraControl,
 		cluster.Targets,
 	)
@@ -877,7 +877,7 @@ func (p *proxyrunner) renameLB(bucketFrom, bucketTo string, clone *bucketMD, pro
 	clone = p.bmdowner.get().clone()
 	clone.del(bucketFrom, true)
 	clone.add(bucketTo, true, props)
-	if errstr := p.savebmdconf(clone); errstr != "" {
+	if errstr := p.savebmdconf(clone, config); errstr != "" {
 		glog.Errorln(errstr)
 	}
 	p.bmdowner.put(clone)
@@ -1308,8 +1308,8 @@ func (p *proxyrunner) listbucket(w http.ResponseWriter, r *http.Request, bucket 
 	return
 }
 
-func (p *proxyrunner) savebmdconf(bucketmd *bucketMD) (errstr string) {
-	bucketmdfull := filepath.Join(cmn.GCO.Get().Confdir, cmn.BucketmdBackupFile)
+func (p *proxyrunner) savebmdconf(bucketmd *bucketMD, config *cmn.Config) (errstr string) {
+	bucketmdfull := filepath.Join(config.Confdir, cmn.BucketmdBackupFile)
 	if err := cmn.LocalSave(bucketmdfull, bucketmd); err != nil {
 		errstr = fmt.Sprintf("Failed to store bucket-metadata at %s, err: %v", bucketmdfull, err)
 	}
@@ -2438,7 +2438,7 @@ func (p *proxyrunner) receiveBucketMD(newbucketmd *bucketMD, msg *cmn.ActionMsg)
 		return
 	}
 	p.bmdowner.put(newbucketmd)
-	if errstr := p.savebmdconf(newbucketmd); errstr != "" {
+	if errstr := p.savebmdconf(newbucketmd, cmn.GCO.Get()); errstr != "" {
 		glog.Errorln(errstr)
 	}
 	p.bmdowner.Unlock()

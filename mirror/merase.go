@@ -65,16 +65,9 @@ func (r *XactErase) Run() error {
 	r.config = cmn.GCO.Get()
 init:
 	// start mpath erasers
-	for mpath, mpathInfo := range availablePaths {
-		var (
-			mpathLC string
-			eraser  = &eraser{parent: r, mpathInfo: mpathInfo}
-		)
-		if r.Bislocal {
-			mpathLC = fs.Mountpaths.MakePathLocal(mpath, fs.ObjectType)
-		} else {
-			mpathLC = fs.Mountpaths.MakePathCloud(mpath, fs.ObjectType)
-		}
+	for _, mpathInfo := range availablePaths {
+		eraser := &eraser{parent: r, mpathInfo: mpathInfo}
+		mpathLC := mpathInfo.MakePath(fs.ObjectType, r.Bislocal)
 		r.erasers[mpathLC] = eraser
 		go eraser.jog()
 	}
@@ -125,7 +118,7 @@ func (j *eraser) stop() { j.stopCh <- struct{}{}; close(j.stopCh) }
 
 func (j *eraser) jog() {
 	j.stopCh = make(chan struct{}, 1)
-	dir := j.mpathInfo.MakeBucketDir(fs.ObjectType, j.parent.Bucket, j.parent.Bislocal)
+	dir := j.mpathInfo.MakePathBucket(fs.ObjectType, j.parent.Bucket, j.parent.Bislocal)
 	if err := filepath.Walk(dir, j.walk); err != nil {
 		s := err.Error()
 		if strings.Contains(s, "xaction") {
