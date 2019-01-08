@@ -242,7 +242,7 @@ func (j *copier) mirror(lom *cluster.LOM) {
 	if glog.V(4) {
 		glog.Infof("Copied %s => workfile %s", lom, workfqn)
 	}
-	cpyfqn = fs.CSM.FQN(j.mpathInfo.Path, lom.ParsedFQN.ContentType, lom.Bislocal, lom.Bucket, lom.Objname)
+	cpyfqn = fs.CSM.FQN(j.mpathInfo, lom.ParsedFQN.ContentType, lom.Bislocal, lom.Bucket, lom.Objname)
 	if err := cmn.MvFile(workfqn, cpyfqn); err != nil {
 		glog.Errorln(err)
 		goto fail

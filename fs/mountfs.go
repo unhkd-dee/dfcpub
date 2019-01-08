@@ -140,7 +140,7 @@ func (mi *MountpathInfo) FastRemoveDir(dir string) error {
 	// LRU will take care of removing the rest of the bucket.
 	counter := atomic.AddUint64(&mi.removeDirCounter, 1)
 	nonExistingBucket := fmt.Sprintf("removing-%d", counter)
-	tmpDir := CSM.FQN(mi.Path, WorkfileType, true, nonExistingBucket, "")
+	tmpDir := CSM.FQN(mi, WorkfileType, true, nonExistingBucket, "")
 	if err := os.Rename(dir, tmpDir); err != nil {
 		return err
 	}

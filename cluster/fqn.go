@@ -53,10 +53,9 @@ func ResolveFQN(fqn string, bowner Bowner, islocal ...bool) (parsedFQN fs.FQNpar
 }
 
 func FQN(contentType, bucket, objname string, isLocal bool) (fqn, errstr string) {
-	var mpath string
-	if mpath, errstr = hrwMpath(bucket, objname); errstr != "" {
-		return
+	var mpathInfo *fs.MountpathInfo
+	if mpathInfo, errstr = hrwMpath(bucket, objname); errstr == "" {
+		fqn = fs.CSM.FQN(mpathInfo, contentType, isLocal, bucket, objname)
 	}
-	fqn = fs.CSM.FQN(mpath, contentType, isLocal, bucket, objname)
 	return
 }
