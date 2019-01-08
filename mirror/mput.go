@@ -24,7 +24,7 @@ type (
 		// runtime
 		workCh        chan *cluster.LOM
 		mpathChangeCh chan struct{}
-		joggers       map[string]*jogger
+		copiers       map[string]*copier
 		// init
 		Bucket   string
 		Mirror   cmn.MirrorConf
@@ -32,7 +32,7 @@ type (
 		T        cluster.Target
 		Bislocal bool
 	}
-	jogger struct { // one per mountpath
+	copier struct { // one per mountpath
 		parent    *XactCopy
 		mpathInfo *fs.MountpathInfo
 		workCh    chan *cluster.LOM
@@ -48,7 +48,7 @@ var _ fs.PathRunner = &XactCopy{}
 
 func (r *XactCopy) SetID(id int64) { cmn.Assert(false) }
 
-func (r *XactCopy) ReqAddMountpath(mpath string)     { r.mpathChangeCh <- struct{}{} } // TODO: same for other "joggers"
+func (r *XactCopy) ReqAddMountpath(mpath string)     { r.mpathChangeCh <- struct{}{} } // TODO: same for other "copiers"
 func (r *XactCopy) ReqRemoveMountpath(mpath string)  { r.mpathChangeCh <- struct{}{} }
 func (r *XactCopy) ReqEnableMountpath(mpath string)  { r.mpathChangeCh <- struct{}{} }
 func (r *XactCopy) ReqDisableMountpath(mpath string) { r.mpathChangeCh <- struct{}{} }
@@ -58,26 +58,26 @@ func (r *XactCopy) ReqDisableMountpath(mpath string) { r.mpathChangeCh <- struct
 //
 
 // - runs on a per-mirrored bucket basis
-// - dispatches replication requests to a dedicated mountpath jogger
+// - dispatches replication requests to a dedicated mountpath copier
 // - ref-counts pending requests and self-terminates when idle for a while
 func (r *XactCopy) Run() error {
 	// init
 	availablePaths, _ := fs.Mountpaths.Get()
 	r.init(len(availablePaths))
 init:
-	// start mpath joggers
+	// start mpath copiers
 	for mpath, mpathInfo := range availablePaths {
 		var (
 			mpathLC string
-			jogger  = &jogger{parent: r, mpathInfo: mpathInfo}
+			copier  = &copier{parent: r, mpathInfo: mpathInfo}
 		)
 		if r.Bislocal {
 			mpathLC = fs.Mountpaths.MakePathLocal(mpath, fs.ObjectType)
 		} else {
 			mpathLC = fs.Mountpaths.MakePathCloud(mpath, fs.ObjectType)
 		}
-		r.joggers[mpathLC] = jogger
-		go jogger.jog()
+		r.copiers[mpathLC] = copier
+		go copier.jog()
 	}
 	// control loop
 	for {
@@ -91,8 +91,8 @@ init:
 				break
 			}
 			// load balance
-			if jogger := r.loadBalance(lom); jogger != nil {
-				jogger.workCh <- lom
+			if copier := r.loadBalance(lom); copier != nil {
+				copier.workCh <- lom
 			}
 		case <-r.ChanCheckTimeout():
 			if r.Timeout() {
@@ -103,12 +103,12 @@ init:
 			r.stop()
 			return fmt.Errorf("%s aborted, exiting", r)
 		case <-r.mpathChangeCh:
-			for _, jogger := range r.joggers {
-				jogger.stop()
+			for _, copier := range r.copiers {
+				copier.stop()
 			}
 			availablePaths, _ = fs.Mountpaths.Get()
 			l := len(availablePaths)
-			r.joggers = make(map[string]*jogger, l) // new joggers map
+			r.copiers = make(map[string]*copier, l) // new copiers map
 			if l == 0 {
 				r.stop()
 				return fmt.Errorf("%s no mountpaths, exiting", r)
@@ -137,7 +137,7 @@ func (r *XactCopy) Stop(error) { r.Abort() } // call base method
 
 func (r *XactCopy) init(l int) {
 	r.workCh = make(chan *cluster.LOM, r.Mirror.MirrorBurst)
-	r.joggers = make(map[string]*jogger, l)
+	r.copiers = make(map[string]*copier, l)
 }
 
 // =================== load balancing and self-throttling ========================
@@ -155,9 +155,9 @@ func (r *XactCopy) init(l int) {
 // serve GETs are even less available for other extended actions than otherwise, etc.
 // =================== load balancing and self-throttling ========================
 
-func (r *XactCopy) loadBalance(lom *cluster.LOM) (jogger *jogger) {
+func (r *XactCopy) loadBalance(lom *cluster.LOM) (copier *copier) {
 	var max float32 = 100
-	for _, j := range r.joggers {
+	for _, j := range r.copiers {
 		if j.mpathInfo.Path == lom.ParsedFQN.MpathInfo.Path {
 			continue
 		}
@@ -165,7 +165,7 @@ func (r *XactCopy) loadBalance(lom *cluster.LOM) (jogger *jogger) {
 		//       destination happens to be busier than the source;
 		//       throttle via delay or rescheduling
 		if _, curr := j.mpathInfo.GetIOstats(fs.StatDiskUtil); curr.Max < max {
-			jogger = j
+			copier = j
 			max = curr.Max
 		}
 	}
@@ -179,8 +179,8 @@ func (r *XactCopy) stop() {
 	}
 	r.EndTime(time.Now())
 	r.XactDemandBase.Stop()
-	for _, jogger := range r.joggers {
-		jogger.stop()
+	for _, copier := range r.copiers {
+		copier.stop()
 	}
 	for lom := range r.workCh {
 		glog.Infof("Stopping, not copying %s", lom)
@@ -189,9 +189,9 @@ func (r *XactCopy) stop() {
 }
 
 //
-// mpath jogger
+// mpath copier
 //
-func (j *jogger) stop() {
+func (j *copier) stop() {
 	for lom := range j.workCh {
 		glog.Infof("Stopping, not copying %s", lom)
 		j.parent.DecPending()
@@ -200,7 +200,7 @@ func (j *jogger) stop() {
 	close(j.stopCh)
 }
 
-func (j *jogger) jog() {
+func (j *copier) jog() {
 	j.workCh = make(chan *cluster.LOM, j.parent.Mirror.MirrorBurst)
 	j.stopCh = make(chan struct{}, 1)
 	j.buf = j.parent.Slab.Alloc()
@@ -219,7 +219,7 @@ loop:
 
 // TODO: - versioned updates
 //       - disable active mirror via bucket props
-func (j *jogger) mirror(lom *cluster.LOM) {
+func (j *copier) mirror(lom *cluster.LOM) {
 	cmn.Assert(j.parent.Mirror.MirrorOptimizeRead, cmn.NotSupported)
 	// [throttle] when the optimization objective is read load balancing (rather than
 	// data redundancy), we start dropping requests at high (local FS) utilization

@@ -392,12 +392,12 @@ func (mfs *MountedFS) Get() (map[string]*MountpathInfo, map[string]*MountpathInf
 // DisableFsIDCheck disables fsid checking when adding new mountpath
 func (mfs *MountedFS) DisableFsIDCheck() { mfs.checkFsID = false }
 
-// builds fqn of directory for local buckets from mountpath
+// builds fqn of directory for all local buckets from mountpath
 func (mfs *MountedFS) MakePathLocal(basePath, contentType string) string {
 	return filepath.Join(basePath, contentType, mfs.localBuckets)
 }
 
-// builds fqn of directory for cloud buckets from mountpath
+// builds fqn of directory for all cloud buckets from mountpath
 func (mfs *MountedFS) MakePathCloud(basePath, contentType string) string {
 	return filepath.Join(basePath, contentType, mfs.cloudBuckets)
 }
