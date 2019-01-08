@@ -63,7 +63,6 @@ type (
 		Bislocal     bool // the bucket (that contains this object) is local
 		Doesnotexist bool // the object does not exists (by fstat)
 		Misplaced    bool // the object is misplaced
-		IsCopy       bool // is a local replica
 		Badchecksum  bool // this object has a bad checksum
 	}
 )
@@ -88,6 +87,34 @@ func (lom *LOM) RestoredReceived(props *LOM) {
 
 func (lom *LOM) Exists() bool     { return !lom.Doesnotexist }
 func (lom *LOM) LRUenabled() bool { return lom.Bucketmd.LRUenabled(lom.Bucket) }
+
+// local replica helpers
+func (lom *LOM) IsCopy() bool  { return lom.CopyFQN != "" && lom.CopyFQN == lom.HrwFQN } // is a
+func (lom *LOM) HasCopy() bool { return lom.CopyFQN != "" && lom.Fqn == lom.HrwFQN }     // has one
+
+func (lom *LOM) SetXcopy(cpyfqn string) (errstr string) { // cross-ref
+	if errstr = fs.SetXattr(lom.Fqn, cmn.XattrCopies, []byte(cpyfqn)); errstr == "" {
+		if errstr = fs.SetXattr(lom.CopyFQN, cmn.XattrCopies, []byte(lom.Fqn)); errstr == "" {
+			lom.CopyFQN = cpyfqn
+			return
+		}
+	}
+	if err := os.Remove(cpyfqn); err != nil && !os.IsNotExist(err) {
+		lom.T.FSHC(err, lom.Fqn)
+	}
+	return
+}
+
+func (lom *LOM) DelCopy() (errstr string) {
+	if err := os.Remove(lom.CopyFQN); err != nil && !os.IsNotExist(err) {
+		lom.T.FSHC(err, lom.Fqn)
+		return err.Error()
+	}
+	errstr = fs.DelXattr(lom.Fqn, cmn.XattrCopies)
+	return
+}
+
+// format
 func (lom *LOM) String() string {
 	var (
 		a string
@@ -111,8 +138,8 @@ func (lom *LOM) String() string {
 	if lom.Misplaced {
 		a += "(misplaced)"
 	}
-	if lom.IsCopy {
-		a += "(is a copy)"
+	if lom.IsCopy() {
+		a += "(is a local replica)"
 	}
 	if lom.Badchecksum {
 		a += "(bad checksum)"
@@ -186,7 +213,6 @@ func (lom *LOM) Fill(action int, config ...*cmn.Config) (errstr string) {
 		lom.CopyFQN = string(copyfqn)
 		if lom.CopyFQN == lom.HrwFQN {
 			lom.Misplaced = false
-			lom.IsCopy = true
 		}
 	}
 	return
@@ -306,19 +332,15 @@ func (lom *LOM) init() (errstr string) {
 }
 
 func (lom *LOM) resolveFQN(bowner Bowner, bislocal ...bool) (errstr string) {
-	var (
-		err    error
-		hrwfqn string
-	)
+	var err error
 	if len(bislocal) == 0 {
-		lom.ParsedFQN, hrwfqn, err = ResolveFQN(lom.Fqn, bowner)
+		lom.ParsedFQN, lom.HrwFQN, err = ResolveFQN(lom.Fqn, bowner)
 	} else {
-		lom.ParsedFQN, hrwfqn, err = ResolveFQN(lom.Fqn, nil, lom.Bislocal)
+		lom.ParsedFQN, lom.HrwFQN, err = ResolveFQN(lom.Fqn, nil, lom.Bislocal)
 	}
 	if err != nil {
 		if _, ok := err.(*ErrFqnMisplaced); ok {
 			lom.Misplaced = true
-			lom.HrwFQN = hrwfqn
 		} else {
 			errstr = err.Error()
 		}

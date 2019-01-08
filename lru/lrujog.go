@@ -196,7 +196,7 @@ func (lctx *lructx) evictObj(fi *fileInfo) (ok bool) {
 	// local replica must be go with the object; the replica, however, is
 	// located in a different local FS and belongs, therefore, to a different LRU jogger
 	// (hence, precise size accounting TODO)
-	if fi.lom.CopyFQN != "" {
+	if fi.lom.HasCopy() {
 		if err := os.Remove(fi.lom.CopyFQN); err != nil {
 			if !os.IsNotExist(err) {
 				glog.Infof("Failed to remove copy(%s)=>%s, err: %v", fi.lom, fi.lom.CopyFQN, err)

@@ -5,6 +5,7 @@
 package mirror
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -153,9 +154,9 @@ func (j *eraser) walk(fqn string, osfi os.FileInfo, err error) error {
 		glog.Infof("misplaced: %s, fqn=%s", lom, fqn)
 		return nil
 	}
-	if lom.CopyFQN != "" {
-		if err := os.Remove(lom.CopyFQN); err == nil {
-			fs.DelXattr(lom.Fqn, cmn.XattrCopies)
+	if lom.HasCopy() {
+		if errstr := lom.DelCopy(); errstr != "" {
+			return errors.New(errstr)
 		}
 	}
 	return nil

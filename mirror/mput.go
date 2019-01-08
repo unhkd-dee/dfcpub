@@ -240,16 +240,9 @@ func (j *copier) mirror(lom *cluster.LOM) {
 		glog.Errorln(err)
 		goto fail
 	}
-	// FIXME: lom.method()
-	if errstr := fs.SetXattr(lom.Fqn, cmn.XattrCopies, []byte(cpyfqn)); errstr != "" {
+	if errstr := lom.SetXcopy(cpyfqn); errstr != "" {
 		glog.Errorln(errstr)
-		goto fail
-	}
-	lom.CopyFQN = cpyfqn
-	if errstr := fs.SetXattr(lom.CopyFQN, cmn.XattrCopies, []byte(lom.Fqn)); errstr != "" {
-		glog.Errorln(errstr)
-	}
-	if glog.V(3) {
+	} else if glog.V(3) {
 		glog.Infof("Copied %s => %s", lom, j.mpathInfo)
 	}
 	return

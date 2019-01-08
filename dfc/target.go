@@ -2128,6 +2128,12 @@ func (t *targetrunner) doPutCommit(ct context.Context, lom *cluster.LOM, putfqn 
 			return
 		}
 	}
+	if lom.HasCopy() {
+		if errstr = lom.DelCopy(); errstr != "" {
+			t.rtnamemap.Unlock(lom.Uname, true)
+			return
+		}
+	}
 	if err := cmn.MvFile(putfqn, lom.Fqn); err != nil {
 		t.rtnamemap.Unlock(lom.Uname, true)
 		errstr = fmt.Sprintf("work => %s: %v", lom, err)
