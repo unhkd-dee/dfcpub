@@ -66,15 +66,15 @@ func (r *XactCopy) Run() error {
 	r.init(len(availablePaths))
 init:
 	// start mpath copiers
-	for mpath, mpathInfo := range availablePaths {
+	for _, mpathInfo := range availablePaths {
 		var (
 			mpathLC string
 			copier  = &copier{parent: r, mpathInfo: mpathInfo}
 		)
 		if r.Bislocal {
-			mpathLC = fs.Mountpaths.MakePathLocal(mpath, fs.ObjectType)
+			mpathLC = mpathInfo.MakePathLocal(fs.ObjectType)
 		} else {
-			mpathLC = fs.Mountpaths.MakePathCloud(mpath, fs.ObjectType)
+			mpathLC = mpathInfo.MakePathCloud(fs.ObjectType)
 		}
 		r.copiers[mpathLC] = copier
 		go copier.jog()
@@ -247,6 +247,7 @@ func (j *copier) mirror(lom *cluster.LOM) {
 		glog.Errorln(err)
 		goto fail
 	}
+	// FIXME: lom.method()
 	if errstr := fs.SetXattr(lom.Fqn, cmn.XattrCopies, []byte(cpyfqn)); errstr != "" {
 		glog.Errorln(errstr)
 		goto fail

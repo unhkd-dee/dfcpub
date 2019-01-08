@@ -53,10 +53,10 @@ func (mfs *MountedFS) FQN2Info(fqn string) (parsed FQNparsed, err error) {
 		err = fmt.Errorf("invalid fqn %s: bucket name is empty", fqn)
 	} else if items[3] == "" {
 		err = fmt.Errorf("invalid fqn %s: object name is empty", fqn)
-	} else if items[1] != mfs.localBuckets && items[1] != mfs.cloudBuckets {
+	} else if items[1] != cmn.LocalBs && items[1] != cmn.CloudBs {
 		err = fmt.Errorf("invalid bucket type %q for fqn %s", items[1], fqn)
 	} else {
-		parsed.ContentType, parsed.IsLocal, parsed.Bucket, parsed.Objname = items[0], (items[1] == mfs.localBuckets), items[2], items[3]
+		parsed.ContentType, parsed.IsLocal, parsed.Bucket, parsed.Objname = items[0], (items[1] == cmn.LocalBs), items[2], items[3]
 	}
 	return
 }

@@ -6,7 +6,9 @@ package mirror
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -25,6 +27,7 @@ type (
 		// runtime
 		mpathChangeCh chan struct{}
 		erasers       map[string]*eraser
+		config        *cmn.Config
 		// init
 		Bucket   string
 		Mirror   cmn.MirrorConf
@@ -59,6 +62,7 @@ func (r *XactErase) Run() error {
 	// init
 	availablePaths, _ := fs.Mountpaths.Get()
 	r.erasers = make(map[string]*eraser, len(availablePaths))
+	r.config = cmn.GCO.Get()
 init:
 	// start mpath erasers
 	for mpath, mpathInfo := range availablePaths {
@@ -121,13 +125,56 @@ func (j *eraser) stop() { j.stopCh <- struct{}{}; close(j.stopCh) }
 
 func (j *eraser) jog() {
 	j.stopCh = make(chan struct{}, 1)
-	if err := filepath.Walk(lctx.bckTypeDir, j.walk); err != nil {
+	dir := j.mpathInfo.MakeBucketDir(fs.ObjectType, j.parent.Bucket, j.parent.Bislocal)
+	if err := filepath.Walk(dir, j.walk); err != nil {
 		s := err.Error()
 		if strings.Contains(s, "xaction") {
-			glog.Infof("%s: stopping traversal: %s", lctx.bckTypeDir, s)
+			glog.Infof("%s: stopping traversal: %s", dir, s)
 		} else {
-			glog.Errorf("%s: failed to traverse, err: %v", lctx.bckTypeDir, err)
+			glog.Errorf("%s: failed to traverse, err: %v", dir, err)
 		}
 		return
 	}
+}
+
+func (j *eraser) walk(fqn string, osfi os.FileInfo, err error) error {
+	if err != nil {
+		glog.Errorf("invoked with err: %v", err)
+		return err
+	}
+	if osfi.Mode().IsDir() {
+		return nil
+	}
+	if err = j.yieldTerm(); err != nil {
+		return err
+	}
+	lom := &cluster.LOM{T: j.parent.T, Fqn: fqn}
+	if errstr := lom.Fill(cluster.LomFstat|cluster.LomCopy, j.parent.config); errstr != "" || lom.Doesnotexist {
+		if glog.V(4) {
+			glog.Infof("Warning: %s", errstr)
+		}
+		return nil
+	}
+	// includes post-rebalancing cleanup
+	if lom.Misplaced {
+		glog.Infof("misplaced: %s, fqn=%s", lom, fqn)
+		return nil
+	}
+	if lom.CopyFQN != "" {
+		if err := os.Remove(lom.CopyFQN); err == nil {
+			fs.DelXattr(lom.Fqn, cmn.XattrCopies)
+		}
+	}
+	return nil
+}
+
+func (j *eraser) yieldTerm() error {
+	select {
+	case <-j.stopCh:
+		return nil
+	default:
+		runtime.Gosched()
+		break
+	}
+	return nil
 }

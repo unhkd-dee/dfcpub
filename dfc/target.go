@@ -596,7 +596,8 @@ func (t *targetrunner) restoreObjLocalBucket(lom *cluster.LOM, r *http.Request) 
 	// check FS-wide if local rebalance is running
 	aborted, running := t.xactions.isAbortedOrRunningLocalRebalance()
 	if aborted || running {
-		oldFQN, oldSize := t.getFromOtherLocalFS(lom.Bucket, lom.Objname, lom.Bislocal)
+		// FIXME: lom.From(...)
+		oldFQN, oldSize := t.getFromOtherLocalFS(lom)
 		if oldFQN != "" {
 			if glog.V(4) {
 				glog.Infof("Restored (local rebalance in-progress?): %s (%s)", oldFQN, cmn.B2S(oldSize, 1))
@@ -1361,14 +1362,14 @@ func (t *targetrunner) renameLB(bucketFrom, bucketTo string) (errstr string) {
 	for contentType := range fs.CSM.RegisteredContentTypes {
 		for _, mpathInfo := range availablePaths {
 			// Create directory for new local bucket
-			toDir := filepath.Join(fs.Mountpaths.MakePathLocal(mpathInfo.Path, contentType), bucketTo)
+			toDir := mpathInfo.MakeBucketDir(contentType, bucketTo, true /*bucket is local*/)
 			if err := cmn.CreateDir(toDir); err != nil {
 				ch <- fmt.Sprintf("Failed to create dir %s, error: %v", toDir, err)
 				continue
 			}
 
 			wg.Add(1)
-			fromDir := filepath.Join(fs.Mountpaths.MakePathLocal(mpathInfo.Path, contentType), bucketFrom)
+			fromDir := mpathInfo.MakeBucketDir(contentType, bucketFrom, true /*bucket is local*/)
 			go func(fromDir string) {
 				time.Sleep(time.Millisecond * 100) // FIXME: 2-phase for the targets to 1) prep (above) and 2) rebalance
 				ch <- t.renameOne(fromDir, bucketFrom, bucketTo)
@@ -1692,13 +1693,7 @@ func (t *targetrunner) prepareLocalObjectList(bucket string, msg *cmn.GetMsg) (*
 		}
 		for _, mpathInfo := range availablePaths {
 			wg.Add(1)
-			var localDir string
-			if islocal {
-				localDir = filepath.Join(fs.Mountpaths.MakePathLocal(mpathInfo.Path, contentType), bucket)
-			} else {
-				localDir = filepath.Join(fs.Mountpaths.MakePathCloud(mpathInfo.Path, contentType), bucket)
-			}
-
+			var localDir = mpathInfo.MakeBucketDir(contentType, bucket, islocal)
 			go walkMpath(localDir)
 		}
 	}
@@ -3359,40 +3354,36 @@ func (t *targetrunner) Disable(mountpath string, why string) (disabled, exists b
 	return t.fsprg.disableMountpath(mountpath)
 }
 
-func (t *targetrunner) getFromOtherLocalFS(bucket, object string, islocal bool) (fqn string, size int64) {
+func (t *targetrunner) getFromOtherLocalFS(lom *cluster.LOM) (fqn string, size int64) {
 	availablePaths, _ := fs.Mountpaths.Get()
-	fn := fs.Mountpaths.MakePathCloud
-	if islocal {
-		fn = fs.Mountpaths.MakePathLocal
-	}
 	for _, mpathInfo := range availablePaths {
-		dir := fn(mpathInfo.Path, fs.ObjectType)
-
-		filePath := filepath.Join(dir, bucket, object)
+		dir := mpathInfo.MakeBucketDir(fs.ObjectType, lom.Bucket, lom.Bislocal)
+		filePath := filepath.Join(dir, lom.Objname)
 		stat, err := os.Stat(filePath)
 		if err == nil {
 			return filePath, stat.Size()
 		}
 	}
-
-	return "", 0
+	return
 }
 
 func removeBuckets(op string, buckets ...string) {
-	availablePaths, _ := fs.Mountpaths.Get()
-	contentTypes := fs.CSM.RegisteredContentTypes
-
-	wg := &sync.WaitGroup{}
+	var (
+		availablePaths, _ = fs.Mountpaths.Get()
+		contentTypes      = fs.CSM.RegisteredContentTypes
+		wg                = &sync.WaitGroup{}
+	)
 	for _, mpathInfo := range availablePaths {
 		wg.Add(1)
 		go func(mi *fs.MountpathInfo) {
 			for _, bucket := range buckets {
 				for contentType := range contentTypes {
-					localBucketFQN := filepath.Join(fs.Mountpaths.MakePathLocal(mi.Path, contentType), bucket)
-					glog.Warningf("%s: FastRemoveDir %q for content-type %q, bucket %q", op, localBucketFQN, contentType, bucket)
-					if err := mi.FastRemoveDir(localBucketFQN); err != nil {
-						// TODO: in case of error, we need to abort and rollback whole operation
-						glog.Errorf("Failed to destroy local bucket dir %q, err: %v", localBucketFQN, err)
+					dir := mi.MakeBucketDir(contentType, bucket, true /*bucket is local*/)
+					if err := mi.FastRemoveDir(dir); err != nil {
+						// TODO: on error abort and rollback
+						glog.Errorf("Failed to destroy local bucket dir %q, err: %v", dir, err)
+					} else {
+						glog.Infof("%s: FastRemoveDir %q for content-type %q, bucket %q", op, dir, contentType, bucket)
 					}
 				}
 			}
@@ -3403,20 +3394,22 @@ func removeBuckets(op string, buckets ...string) {
 }
 
 func createBuckets(op string, buckets ...string) {
-	availablePaths, _ := fs.Mountpaths.Get()
-	contentTypes := fs.CSM.RegisteredContentTypes
-
-	wg := &sync.WaitGroup{}
+	var (
+		availablePaths, _ = fs.Mountpaths.Get()
+		contentTypes      = fs.CSM.RegisteredContentTypes
+		wg                = &sync.WaitGroup{}
+	)
 	for _, mpathInfo := range availablePaths {
 		wg.Add(1)
 		go func(mi *fs.MountpathInfo) {
 			for _, bucket := range buckets {
 				for contentType := range contentTypes {
-					localBucketFQN := filepath.Join(fs.Mountpaths.MakePathLocal(mi.Path, contentType), bucket)
-					glog.Warningf("%s: CreateDir %q for content-type %q, bucket %q", op, localBucketFQN, contentType, bucket)
-					if err := cmn.CreateDir(localBucketFQN); err != nil {
+					dir := mi.MakeBucketDir(contentType, bucket, true /*bucket is local*/)
+					if err := cmn.CreateDir(dir); err != nil {
 						// TODO: in case of error, we need to abort and rollback whole operation
-						glog.Errorf("Failed to create local bucket dir %q, err: %v", localBucketFQN, err)
+						glog.Errorf("Failed to create local bucket dir %q, err: %v", dir, err)
+					} else {
+						glog.Infof("%s: CreateDir %q for content-type %q, bucket %q", op, dir, contentType, bucket)
 					}
 				}
 			}

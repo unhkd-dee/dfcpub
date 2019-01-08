@@ -131,9 +131,9 @@ func newlru(ini *InitLRU, mpathInfo *fs.MountpathInfo, contentType string, conte
 	config *cmn.Config, bislocal bool) *lructx {
 	var bckTypeDir string
 	if bislocal {
-		bckTypeDir = fs.Mountpaths.MakePathLocal(mpathInfo.Path, contentType)
+		bckTypeDir = mpathInfo.MakePathLocal(contentType)
 	} else {
-		bckTypeDir = fs.Mountpaths.MakePathCloud(mpathInfo.Path, contentType)
+		bckTypeDir = mpathInfo.MakePathCloud(contentType)
 	}
 	lctx := &lructx{
 		oldwork:         make([]*fileInfo, 0, 64),

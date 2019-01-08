@@ -98,10 +98,6 @@ type (
 		// Disabled mountpaths - mountpaths which for some reason did not pass
 		// the health check and cannot be used for a moment.
 		disabled unsafe.Pointer
-		// The following correspond to the values in config.sh for "cloud_buckets"
-		// and "local_buckets", used for mpath validation
-		localBuckets string
-		cloudBuckets string
 	}
 	ChangeReq struct {
 		Action string // MountPath action enum (above)
@@ -214,6 +210,26 @@ func (mi *MountpathInfo) String() string {
 	return fmt.Sprintf("mp[%s, fs=%s, util=d%s:q%s]", mi.Path, mi.FileSystem, u, q)
 }
 
+// builds fqn of directory for all local buckets from mountpath
+func (mi *MountpathInfo) MakePathLocal(contentType string) string {
+	return filepath.Join(mi.Path, contentType, cmn.LocalBs)
+}
+
+// builds fqn of directory for all cloud buckets from mountpath
+func (mi *MountpathInfo) MakePathCloud(contentType string) string {
+	return filepath.Join(mi.Path, contentType, cmn.CloudBs)
+}
+
+func (mi *MountpathInfo) MakeBucketDir(contentType, bucket string, bislocal bool) (dir string) {
+	if bislocal {
+		dir = mi.MakePathLocal(contentType)
+	} else {
+		dir = mi.MakePathCloud(contentType)
+	}
+	dir = filepath.Join(dir, bucket)
+	return
+}
+
 //
 // MountedFS aka fs.Mountpaths
 //
@@ -221,10 +237,8 @@ func (mi *MountpathInfo) String() string {
 // NewMountedFS returns initialized instance of MountedFS struct.
 func NewMountedFS() *MountedFS {
 	return &MountedFS{
-		fsIDs:        make(map[syscall.Fsid]string, 10),
-		checkFsID:    true,
-		localBuckets: cmn.LocalBs,
-		cloudBuckets: cmn.CloudBs,
+		fsIDs:     make(map[syscall.Fsid]string, 10),
+		checkFsID: true,
 	}
 }
 
@@ -248,7 +262,7 @@ func (mfs *MountedFS) Init(fsPaths []string) error {
 // Add adds new mountpath to the target's mountpaths.
 func (mfs *MountedFS) Add(mpath string) error {
 	seperator := string(filepath.Separator)
-	for _, bucket := range []string{mfs.localBuckets, mfs.cloudBuckets} {
+	for _, bucket := range []string{cmn.LocalBs, cmn.CloudBs} {
 		invalidMpath := seperator + bucket
 		if strings.HasSuffix(mpath, invalidMpath) {
 			return fmt.Errorf("Cannot add fspath %q with suffix %q", mpath, invalidMpath)
@@ -392,14 +406,28 @@ func (mfs *MountedFS) Get() (map[string]*MountpathInfo, map[string]*MountpathInf
 // DisableFsIDCheck disables fsid checking when adding new mountpath
 func (mfs *MountedFS) DisableFsIDCheck() { mfs.checkFsID = false }
 
-// builds fqn of directory for all local buckets from mountpath
-func (mfs *MountedFS) MakePathLocal(basePath, contentType string) string {
-	return filepath.Join(basePath, contentType, mfs.localBuckets)
+// given mpath, returns local (buckets) directory for a given content-type
+func (mfs *MountedFS) MakePathLocal(mpath, contentType string) string {
+	availablePaths, disabledPaths := mfs.Get()
+	if mi, exists := availablePaths[mpath]; exists {
+		return mi.MakePathLocal(contentType)
+	} else if mi, exists = disabledPaths[mpath]; exists {
+		return mi.MakePathLocal(contentType)
+	}
+	glog.Errorf("Invalid mountpath %s", mpath)
+	return ""
 }
 
-// builds fqn of directory for all cloud buckets from mountpath
-func (mfs *MountedFS) MakePathCloud(basePath, contentType string) string {
-	return filepath.Join(basePath, contentType, mfs.cloudBuckets)
+// given mpath, returns cloud (buckets) directory for a given content-type
+func (mfs *MountedFS) MakePathCloud(mpath, contentType string) string {
+	availablePaths, disabledPaths := mfs.Get()
+	if mi, exists := availablePaths[mpath]; exists {
+		return mi.MakePathCloud(contentType)
+	} else if mi, exists = disabledPaths[mpath]; exists {
+		return mi.MakePathCloud(contentType)
+	}
+	glog.Errorf("Invalid mountpath %s", mpath)
+	return ""
 }
 
 //
