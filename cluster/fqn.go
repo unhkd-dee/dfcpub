@@ -11,15 +11,6 @@ import (
 	"github.com/NVIDIA/dfcpub/fs"
 )
 
-// error types
-type (
-	ErrFqnMisplaced struct {
-		errstr string
-	}
-)
-
-func (e *ErrFqnMisplaced) Error() string { return e.errstr }
-
 //
 // resolve and validate fqn
 //
@@ -35,8 +26,7 @@ func ResolveFQN(fqn string, bowner Bowner, islocal ...bool) (parsedFQN fs.FQNpar
 		return
 	}
 	if hrwfqn != fqn {
-		errstr = fmt.Sprintf("%s (%s/%s) appears to be locally misplaced: hrwfqn %s", fqn, parsedFQN.Bucket, parsedFQN.Objname, hrwfqn)
-		err = &ErrFqnMisplaced{errstr}
+		err = fmt.Errorf("%s (%s/%s) appears to be locally misplaced: hrwfqn %s", fqn, parsedFQN.Bucket, parsedFQN.Objname, hrwfqn)
 		return
 	}
 	var bislocal bool

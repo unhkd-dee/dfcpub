@@ -176,7 +176,7 @@ func (rb *localRebJogger) walk(fqn string, fileInfo os.FileInfo, err error) erro
 		}
 		return nil
 	}
-	if !lom.Misplaced {
+	if !lom.Misplaced() {
 		return nil
 	}
 	if glog.V(4) {

@@ -99,7 +99,7 @@ func (lctx *lructx) walk(fqn string, osfi os.FileInfo, err error) error {
 	}
 
 	// includes post-rebalancing cleanup
-	if lom.Misplaced {
+	if lom.Misplaced() {
 		glog.Infof("misplaced: %s, fqn=%s", lom, fqn)
 		fi := &fileInfo{fqn: fqn, lom: lom}
 		lctx.oldwork = append(lctx.oldwork, fi)

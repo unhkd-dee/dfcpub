@@ -1975,7 +1975,7 @@ func (ci *allfinfos) listwalkf(fqn string, osfi os.FileInfo, err error) error {
 		if os.IsNotExist(err) {
 			return nil
 		}
-		glog.Errorf("listwalkf callback invoked with err: %v", err)
+		glog.Errorf("listwalkf invoked with err: %v", err)
 		return err
 	}
 	if ci.fileCount >= ci.limit {
@@ -1989,9 +1989,12 @@ func (ci *allfinfos) listwalkf(fqn string, osfi os.FileInfo, err error) error {
 		objStatus = cmn.ObjStatusOK
 		lom       = &cluster.LOM{T: ci.t, Fqn: fqn}
 	)
-	errstr := lom.Fill(0)
+	errstr := lom.Fill(cluster.LomFstat)
+	if lom.Doesnotexist {
+		return nil
+	}
 	if ci.needStatus || ci.needAtime {
-		if errstr != "" || lom.Misplaced {
+		if errstr != "" || lom.Misplaced() {
 			glog.Warning(errstr)
 			objStatus = cmn.ObjStatusMoved
 		}
