@@ -40,6 +40,11 @@ const (
 	KeepaliveAverageType   = "average"
 )
 
+const (
+	ThrottleSleepIn  = time.Millisecond * 10
+	ThrottleSleepOut = time.Second
+)
+
 //
 // CONFIG PROVIDER
 //

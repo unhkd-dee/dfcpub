@@ -41,8 +41,6 @@ import (
 const (
 	minEvictThresh   = cmn.MiB
 	capCheckInterval = cmn.MiB * 256 // capacity checking "interval"
-	throttleTimeIn   = time.Millisecond * 10
-	throttleTimeOut  = time.Second
 )
 
 type (
@@ -110,16 +108,16 @@ func InitAndRun(ini *InitLRU) {
 			continue
 		}
 		//
-		// NOTE the sequence: LRU local buckets first, Cloud buckets - second
+		// NOTE the sequence: Cloud buckets first, local buckets second
 		//
 		for _, mpathInfo := range availablePaths {
-			lctx := newlru(ini, mpathInfo, contentType, contentResolver, config, true /* these buckets are local */)
+			lctx := newlru(ini, mpathInfo, contentType, contentResolver, config, false /* cloud */)
 			wg.Add(1)
 			go lctx.jog(wg)
 		}
 		wg.Wait()
 		for _, mpathInfo := range availablePaths {
-			lctx := newlru(ini, mpathInfo, contentType, contentResolver, config, false /* cloud */)
+			lctx := newlru(ini, mpathInfo, contentType, contentResolver, config, true /* these buckets are local */)
 			wg.Add(1)
 			go lctx.jog(wg)
 		}

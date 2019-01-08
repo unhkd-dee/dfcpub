@@ -149,7 +149,7 @@ func (r *XactCopy) init(l int) {
 // =================== load balancing and self-throttling ========================
 
 func (r *XactCopy) loadBalance(lom *cluster.LOM) (copier *copier) {
-	var max float32 = 100
+	var util = cmn.PairF32{100, 100}
 	for _, j := range r.copiers {
 		if j.mpathInfo.Path == lom.ParsedFQN.MpathInfo.Path {
 			continue
@@ -157,10 +157,16 @@ func (r *XactCopy) loadBalance(lom *cluster.LOM) (copier *copier) {
 		// TODO: minimize or eliminate the cases when replication
 		//       destination happens to be busier than the source;
 		//       throttle via delay or rescheduling
-		if _, curr := j.mpathInfo.GetIOstats(fs.StatDiskUtil); curr.Max < max {
+		if _, curr := j.mpathInfo.GetIOstats(fs.StatDiskUtil); curr.Max < util.Max {
 			copier = j
-			max = curr.Max
+			util = curr
 		}
+	}
+	// [throttle] when the optimization objective is read load balancing (rather than
+	// data redundancy), we start dropping requests at high local FSes utilizations
+	if util.Max >= float32(lom.Config.Xaction.DiskUtilHighWM) && util.Min > float32(lom.Config.Xaction.DiskUtilLowWM) {
+		glog.Errorf("utilization %s - dropping %s", util, lom)
+		copier = nil
 	}
 	return
 }
@@ -213,15 +219,6 @@ loop:
 // TODO: - versioned updates
 //       - disable active mirror via bucket props
 func (j *copier) mirror(lom *cluster.LOM) {
-	cmn.Assert(j.parent.Mirror.MirrorOptimizeRead, cmn.NotSupported)
-	// [throttle] when the optimization objective is read load balancing (rather than
-	// data redundancy), we start dropping requests at high (local FS) utilization
-	_, curr := j.mpathInfo.GetIOstats(fs.StatDiskUtil)
-	if curr.Max >= float32(lom.Config.Xaction.DiskUtilHighWM) && curr.Min > float32(lom.Config.Xaction.DiskUtilLowWM) {
-		glog.Errorf("utilization %s - dropping %s => %s", curr, lom, j.mpathInfo)
-		return
-	}
-
 	// copy
 	var (
 		cpyfqn       string

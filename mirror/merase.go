@@ -20,10 +20,12 @@ import (
 	"github.com/NVIDIA/dfcpub/memsys"
 )
 
+const throttleNumErased = 16
+
 type (
 	XactErase struct {
 		// implements cmn.Xact a cmn.Runner interfaces
-		cmn.XactDemandBase
+		cmn.XactBase
 		cmn.Named
 		// runtime
 		mpathChangeCh chan struct{}
@@ -39,6 +41,7 @@ type (
 	eraser struct { // one per mountpath
 		parent    *XactErase
 		mpathInfo *fs.MountpathInfo
+		num       int64
 		stopCh    chan struct{}
 	}
 )
@@ -106,7 +109,6 @@ func (r *XactErase) stop() {
 		return
 	}
 	r.EndTime(time.Now())
-	r.XactDemandBase.Stop()
 	for _, eraser := range r.erasers {
 		eraser.stop()
 	}
@@ -139,9 +141,6 @@ func (j *eraser) walk(fqn string, osfi os.FileInfo, err error) error {
 	if osfi.Mode().IsDir() {
 		return nil
 	}
-	if err = j.yieldTerm(); err != nil {
-		return err
-	}
 	lom := &cluster.LOM{T: j.parent.T, Fqn: fqn}
 	if errstr := lom.Fill(cluster.LomFstat|cluster.LomCopy, j.parent.config); errstr != "" || lom.Doesnotexist {
 		if glog.V(4) {
@@ -149,15 +148,20 @@ func (j *eraser) walk(fqn string, osfi os.FileInfo, err error) error {
 		}
 		return nil
 	}
-	// includes post-rebalancing cleanup
-	if lom.Misplaced {
-		glog.Infof("misplaced: %s, fqn=%s", lom, fqn)
+	if !lom.HasCopy() {
 		return nil
 	}
-	if lom.HasCopy() {
-		if errstr := lom.DelCopy(); errstr != "" {
-			return errors.New(errstr)
+	if errstr := lom.DelCopy(); errstr != "" {
+		return errors.New(errstr)
+	}
+	j.num++
+	if j.num >= throttleNumErased {
+		j.num = 0
+		if err = j.yieldTerm(); err != nil {
+			return err
 		}
+	} else {
+		runtime.Gosched()
 	}
 	return nil
 }
@@ -165,9 +169,15 @@ func (j *eraser) walk(fqn string, osfi os.FileInfo, err error) error {
 func (j *eraser) yieldTerm() error {
 	select {
 	case <-j.stopCh:
-		return nil
+		return fmt.Errorf("%s aborted, exiting", j)
 	default:
-		runtime.Gosched()
+		_, curr := j.mpathInfo.GetIOstats(fs.StatDiskUtil)
+		j.num = 0
+		if curr.Max >= float32(j.parent.config.Xaction.DiskUtilHighWM) && curr.Min > float32(j.parent.config.Xaction.DiskUtilLowWM) {
+			time.Sleep(cmn.ThrottleSleepOut)
+		} else {
+			time.Sleep(cmn.ThrottleSleepIn)
+		}
 		break
 	}
 	return nil
